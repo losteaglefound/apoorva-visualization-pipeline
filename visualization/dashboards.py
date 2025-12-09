@@ -20,6 +20,7 @@ except ImportError:
     np = None
 
 from analysis.metrics import AnalysisLayer
+from visualization.image_analysis_visualizer import ImageAnalysisVisualizer
 from config.settings import settings
 from config.logging_config import get_visualization_logger
 
@@ -37,6 +38,7 @@ class DashboardGenerator:
         
         self.logger.info("Initializing Dashboard Generator")
         self.analyzer = AnalysisLayer()
+        self.image_visualizer = ImageAnalysisVisualizer()
         self.output_dir = Path(settings.DASHBOARD_OUTPUT_DIR)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.logger.info(f"Dashboard output directory: {self.output_dir}")
@@ -62,6 +64,16 @@ class DashboardGenerator:
             ("scene_density", self.create_scene_density),
             ("assets_extracted", self.create_assets_extracted)
         ]
+        
+        # Add image analysis for sample sequences
+        try:
+            self.logger.info("Generating sample image analysis reports")
+            image_reports = self.create_sample_image_analyses(metrics)
+            if image_reports:
+                dashboards["image_analyses"] = image_reports
+                self.logger.info(f"Generated {len(image_reports)} image analysis reports")
+        except Exception as e:
+            self.logger.warning(f"Image analysis generation skipped: {e}", exc_info=True)
         
         for name, method in dashboard_methods:
             try:
@@ -343,6 +355,63 @@ class DashboardGenerator:
         plt.close()
         
         return str(output_path)
+    
+    def create_sample_image_analyses(self, metrics: Dict[str, Any], 
+                                    num_sequences: int = 3,
+                                    images_per_sequence: int = 2) -> Dict[str, str]:
+        """
+        Create image analysis reports for sample sequences.
+        
+        Args:
+            metrics: Metrics dictionary
+            num_sequences: Number of sequences to analyze
+            images_per_sequence: Number of images per sequence to analyze
+            
+        Returns:
+            Dictionary mapping image identifiers to analysis report paths
+        """
+        self.logger.info(f"Creating sample image analyses: {num_sequences} sequences, {images_per_sequence} images each")
+        
+        all_reports = {}
+        
+        try:
+            # Get sample sequences from different sources
+            all_sequences = self.analyzer.clickhouse.query_sequences(limit=1000)
+            
+            # Sample sequences from each source
+            openx_sequences = [s for s in all_sequences if s["source"] == "openx"][:num_sequences]
+            roworks_sequences = [s for s in all_sequences if s["source"] == "roworks"][:num_sequences]
+            
+            # Analyze Open-X sequences
+            for seq in openx_sequences:
+                try:
+                    seq_id = seq["sequence_id"]
+                    reports = self.image_visualizer.analyze_sequence_images(
+                        sequence_id=seq_id,
+                        source="openx",
+                        max_images=images_per_sequence
+                    )
+                    all_reports.update(reports)
+                except Exception as e:
+                    self.logger.warning(f"Failed to analyze images for sequence {seq.get('sequence_id')}: {e}")
+            
+            # Analyze RoWorks sequences
+            for seq in roworks_sequences:
+                try:
+                    seq_id = seq["sequence_id"]
+                    reports = self.image_visualizer.analyze_sequence_images(
+                        sequence_id=seq_id,
+                        source="roworks",
+                        max_images=images_per_sequence
+                    )
+                    all_reports.update(reports)
+                except Exception as e:
+                    self.logger.warning(f"Failed to analyze images for sequence {seq.get('sequence_id')}: {e}")
+        
+        except Exception as e:
+            self.logger.error(f"Error in sample image analysis: {e}", exc_info=True)
+        
+        return all_reports
 
 
 def create_dashboards() -> Dict[str, str]:
