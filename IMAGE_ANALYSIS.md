@@ -12,6 +12,7 @@ The image analysis feature generates detailed reports for each image, including:
 4. **RGB Histogram** - Overlaid histogram showing Red, Green, and Blue channel distributions
 5. **Individual Channel Histograms** - Separate histograms for Red, Green, and Blue channels with statistics
 6. **Edge Detection Statistics** - Detailed statistics about edge density and strength
+7. **3D Intensity Surface** - 3D surface plot of grayscale intensity (downsampled for performance)
 
 Each analysis report includes:
 - Image dimensions and total pixel count
@@ -77,6 +78,10 @@ Each image analysis report is saved as a PNG file with a 2x4 grid layout:
 │ Histogram    │ Histogram    │ Histogram    │              │
 └──────────────┴──────────────┴──────────────┴──────────────┘
 ```
+
+Additionally, each analysis generates a separate file with a 3D surface plot of grayscale intensity:
+
+- `{base_name}_surface.png` shows the grayscale intensity as a 3D surface (downsampled to ~128×128 for speed).
 
 ## Analysis Details
 

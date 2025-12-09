@@ -94,6 +94,16 @@ class ImageAnalysisVisualizer:
         
         # Compute edge detection
         edges = self.analyzer._compute_edge_detection(img_array, method="canny")
+
+        # Also generate a 3D surface plot of image intensity (grayscale)
+        surface_path = self._create_intensity_surface_plot(
+            grayscale,
+            output_filename or (
+                Path(image_path).stem if image_path else
+                Path(s3_key).stem if s3_key else
+                "image_analysis"
+            )
+        )
         
         # Create figure with 2x4 grid
         fig = plt.figure(figsize=(20, 10))
@@ -266,6 +276,8 @@ class ImageAnalysisVisualizer:
         plt.close()
         
         self.logger.info(f"Saved image analysis report: {output_path}")
+        if surface_path:
+            self.logger.info(f"Saved intensity surface plot: {surface_path}")
         return str(output_path)
     
     def _load_image_for_display(self, image_path: Optional[str] = None,
@@ -392,4 +404,35 @@ class ImageAnalysisVisualizer:
         
         self.logger.info(f"Generated {len(reports)} image analysis reports from directory")
         return reports
+
+    def _create_intensity_surface_plot(self, grayscale: np.ndarray, base_name: str) -> Optional[str]:
+        """Create and save a 3D surface plot of image intensity"""
+        try:
+            # Downsample for performance if needed
+            h, w = grayscale.shape
+            step_h = max(h // 128, 1)
+            step_w = max(w // 128, 1)
+            z = grayscale[::step_h, ::step_w]
+
+            y = np.arange(0, z.shape[0])
+            x = np.arange(0, z.shape[1])
+            X, Y = np.meshgrid(x, y)
+
+            fig = plt.figure(figsize=(8, 6))
+            ax = fig.add_subplot(111, projection='3d')
+            surf = ax.plot_surface(X, Y, z, cmap='viridis', linewidth=0, antialiased=True)
+            ax.set_title("Image Intensity as 3D Surface", fontsize=12, fontweight='bold', pad=12)
+            ax.set_xlabel("X (pixels)")
+            ax.set_ylabel("Y (pixels)")
+            ax.set_zlabel("Intensity")
+            fig.colorbar(surf, shrink=0.6, aspect=10, pad=0.1)
+
+            output_path = self.output_dir / f"{base_name}_surface.png"
+            plt.tight_layout()
+            plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor='white')
+            plt.close()
+            return str(output_path)
+        except Exception as e:
+            self.logger.warning(f"Failed to create intensity surface plot: {e}", exc_info=True)
+            return None
 
