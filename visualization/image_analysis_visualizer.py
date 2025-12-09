@@ -104,6 +104,28 @@ class ImageAnalysisVisualizer:
                 "image_analysis"
             )
         )
+
+        # Generate frequency domain plots
+        freq_path = self._create_frequency_plots(
+            grayscale,
+            self.analyzer._compute_frequency_analysis(grayscale),
+            output_filename or (
+                Path(image_path).stem if image_path else
+                Path(s3_key).stem if s3_key else
+                "image_analysis"
+            )
+        )
+
+        # Color space explorations (RGB cube, HSV histograms, palette)
+        color_path = self._create_color_space_plots(
+            img_array,
+            analysis.get("color_spaces", {}),
+            output_filename or (
+                Path(image_path).stem if image_path else
+                Path(s3_key).stem if s3_key else
+                "image_analysis"
+            )
+        )
         
         # Create figure with 2x4 grid
         fig = plt.figure(figsize=(20, 10))
@@ -278,6 +300,10 @@ class ImageAnalysisVisualizer:
         self.logger.info(f"Saved image analysis report: {output_path}")
         if surface_path:
             self.logger.info(f"Saved intensity surface plot: {surface_path}")
+        if freq_path:
+            self.logger.info(f"Saved frequency domain plots: {freq_path}")
+        if color_path:
+            self.logger.info(f"Saved color space plots: {color_path}")
         return str(output_path)
     
     def _load_image_for_display(self, image_path: Optional[str] = None,
@@ -435,4 +461,132 @@ class ImageAnalysisVisualizer:
         except Exception as e:
             self.logger.warning(f"Failed to create intensity surface plot: {e}", exc_info=True)
             return None
+
+    def _create_frequency_plots(self, grayscale: np.ndarray, freq_data: Dict[str, Any], base_name: str) -> Optional[str]:
+        """Create and save frequency domain visualizations (spectrum + radial power)"""
+        try:
+            if not freq_data:
+                return None
+
+            # Recompute spectrum for visualization (avoid huge payload usage)
+            g = grayscale.astype(np.float32)
+            fft = np.fft.fft2(g)
+            fft_shift = np.fft.fftshift(fft)
+            magnitude = np.abs(fft_shift)
+            spectrum_log = np.log1p(magnitude)
+
+            radial_power = freq_data.get("radial_power") or []
+            frequencies = np.arange(len(radial_power))
+
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+            # Spectrum
+            im = ax1.imshow(spectrum_log, cmap="magma")
+            ax1.set_title("2D Fourier Spectrum (log scale)", fontsize=12, fontweight="bold")
+            ax1.axis("off")
+            plt.colorbar(im, ax=ax1, fraction=0.046, pad=0.04)
+
+            # Radial power
+            ax2.plot(frequencies, radial_power, color="#1f77b4", linewidth=1.5)
+            ax2.set_title("Radial Power Spectrum", fontsize=12, fontweight="bold")
+            ax2.set_xlabel("Frequency radius (pixels)")
+            ax2.set_ylabel("Mean power")
+            ax2.grid(alpha=0.3)
+
+            # Highlight dominant radius
+            dom = freq_data.get("dominant_radius")
+            if dom is not None and dom < len(frequencies):
+                ax2.axvline(dom, color="red", linestyle="--", linewidth=1.5, label=f"Dominant r={dom}")
+                ax2.legend()
+
+            output_path = self.output_dir / f"{base_name}_frequency.png"
+            plt.tight_layout()
+            plt.savefig(output_path, dpi=200, bbox_inches="tight", facecolor="white")
+            plt.close()
+            return str(output_path)
+        except Exception as e:
+            self.logger.warning(f"Failed to create frequency plots: {e}", exc_info=True)
+            return None
+
+    def _create_color_space_plots(self, img_array: np.ndarray, color_data: Dict[str, Any], base_name: str) -> Optional[str]:
+        """Create RGB cube scatter, HSV histograms, and dominant palette"""
+        try:
+            if not color_data:
+                return None
+
+            rgb_sample = np.array(color_data.get("rgb_sample") or [])
+            hsv_hist = color_data.get("hsv_histograms") or {}
+            dominant = color_data.get("dominant_colors") or []
+
+            fig = plt.figure(figsize=(14, 8))
+            gs = fig.add_gridspec(2, 3, hspace=0.35, wspace=0.35)
+
+            # RGB scatter
+            ax1 = fig.add_subplot(gs[:, 0], projection='3d')
+            if rgb_sample.size > 0:
+                colors_norm = rgb_sample / 255.0
+                ax1.scatter(rgb_sample[:, 0], rgb_sample[:, 1], rgb_sample[:, 2],
+                            c=colors_norm, s=4, alpha=0.6, linewidths=0)
+            ax1.set_xlim(0, 255)
+            ax1.set_ylim(0, 255)
+            ax1.set_zlim(0, 255)
+            ax1.set_xlabel("R")
+            ax1.set_ylabel("G")
+            ax1.set_zlabel("B")
+            ax1.set_title("RGB Color Space (sample)", fontsize=12, fontweight="bold")
+
+            # Hue histogram
+            ax2 = fig.add_subplot(gs[0, 1])
+            hue_hist = hsv_hist.get("hue_histogram", {})
+            self._plot_hist(ax2, hue_hist, color="#e67e22", title="Hue Histogram", xlabel="Hue (degrees)")
+
+            # Saturation histogram
+            ax3 = fig.add_subplot(gs[0, 2])
+            sat_hist = hsv_hist.get("saturation_histogram", {})
+            self._plot_hist(ax3, sat_hist, color="#16a085", title="Saturation Histogram", xlabel="Saturation (0-255)")
+
+            # Value histogram
+            ax4 = fig.add_subplot(gs[1, 1])
+            val_hist = hsv_hist.get("value_histogram", {})
+            self._plot_hist(ax4, val_hist, color="#2980b9", title="Value Histogram", xlabel="Value (0-255)")
+
+            # Dominant palette
+            ax5 = fig.add_subplot(gs[1, 2])
+            ax5.axis("off")
+            if dominant:
+                y0 = 0.1
+                text_lines = []
+                for i, entry in enumerate(dominant[:10]):
+                    c = np.array(entry["color"]) / 255.0
+                    pct = entry["percent"]
+                    ax5.add_patch(plt.Rectangle((0.05, y0 + i*0.08), 0.25, 0.06, color=c))
+                    text_lines.append(f"{i+1}. RGB {entry['color']} - {pct:.1f}%")
+                ax5.text(0.35, 0.9, "Dominant Colors", fontsize=11, fontweight="bold")
+                ax5.text(0.35, 0.8, "\n".join(text_lines), fontsize=10)
+            ax5.set_title("Dominant Palette", fontsize=12, fontweight="bold")
+
+            output_path = self.output_dir / f"{base_name}_colorspace.png"
+            plt.tight_layout()
+            plt.savefig(output_path, dpi=200, bbox_inches="tight", facecolor="white")
+            plt.close()
+            return str(output_path)
+        except Exception as e:
+            self.logger.warning(f"Failed to create color space plots: {e}", exc_info=True)
+            return None
+
+    def _plot_hist(self, ax, hist_data: Dict[str, Any], color: str, title: str, xlabel: str):
+        """Helper to plot histogram from stored frequencies/bin_edges"""
+        freqs = hist_data.get("frequencies")
+        bins = hist_data.get("bin_edges")
+        if freqs is None or bins is None:
+            ax.set_visible(False)
+            return
+        bins = np.array(bins)
+        freqs = np.array(freqs)
+        centers = (bins[:-1] + bins[1:]) / 2.0
+        ax.bar(centers, freqs, width=(bins[1]-bins[0]), color=color, alpha=0.7, edgecolor="black", linewidth=0.4)
+        ax.set_title(title, fontsize=12, fontweight="bold")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Frequency")
+        ax.grid(alpha=0.3, axis="y")
 

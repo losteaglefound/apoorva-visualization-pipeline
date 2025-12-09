@@ -2,17 +2,19 @@
 
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 import statistics
 
 try:
     import numpy as np
     from PIL import Image
     import io
+    from matplotlib import colors as mpl_colors
 except ImportError:
     np = None
     Image = None
     io = None
+    mpl_colors = None
 
 from config.logging_config import get_analysis_logger
 from storage.s3_client import S3Client
@@ -27,6 +29,10 @@ class ImageAnalyzer:
         
         if np is None or Image is None:
             error_msg = "numpy and Pillow required. Install with: pip install numpy Pillow"
+            self.logger.error(error_msg)
+            raise ImportError(error_msg)
+        if mpl_colors is None:
+            error_msg = "matplotlib required. Install with: pip install matplotlib"
             self.logger.error(error_msg)
             raise ImportError(error_msg)
         
@@ -71,6 +77,12 @@ class ImageAnalyzer:
         
         # Compute edge detection
         edges = self._compute_edge_detection(img_array, method="canny")
+
+        # Compute frequency domain analysis
+        frequency = self._compute_frequency_analysis(grayscale)
+
+        # Color space explorations
+        color_space = self._compute_color_spaces(img_array)
         
         # Analyze each channel
         red_stats = self._analyze_channel(red_channel, "Red")
@@ -114,6 +126,8 @@ class ImageAnalyzer:
                 "edges": edges.tolist(),  # For serialization, can be removed if not needed
                 "statistics": edge_stats
             },
+            "frequency_analysis": frequency,
+            "color_spaces": color_space,
             "histogram_data": {
                 "red_histogram": self._compute_histogram_data(red_channel),
                 "green_histogram": self._compute_histogram_data(green_channel),
@@ -441,6 +455,131 @@ class ImageAnalyzer:
             "overall_statistics": {},
             "color_distribution": {},
             "edge_detection": {"statistics": {}},
+            "frequency_analysis": {},
+            "color_spaces": {},
             "histogram_data": {}
         }
+
+    def _compute_frequency_analysis(self, grayscale: np.ndarray) -> Dict[str, Any]:
+        """Compute 2D FFT spectrum and radial power distribution"""
+        try:
+            # Convert to float for FFT
+            g = grayscale.astype(np.float32)
+            fft = np.fft.fft2(g)
+            fft_shift = np.fft.fftshift(fft)
+            magnitude = np.abs(fft_shift)
+            power = magnitude**2
+
+            # Log spectrum for visualization
+            spectrum_log = np.log1p(magnitude)
+
+            # Radial power spectrum
+            h, w = g.shape
+            y = np.arange(-h // 2, h - h // 2)
+            x = np.arange(-w // 2, w - w // 2)
+            X, Y = np.meshgrid(x, y)
+            r = np.sqrt(X**2 + Y**2)
+            r_int = r.astype(np.int32)
+            max_r = int(r_int.max())
+
+            radial_power = np.zeros(max_r + 1, dtype=np.float64)
+            counts = np.zeros(max_r + 1, dtype=np.int64)
+            flat_power = power.flatten()
+            flat_r = r_int.flatten()
+            np.add.at(radial_power, flat_r, flat_power)
+            np.add.at(counts, flat_r, 1)
+            counts_safe = np.where(counts == 0, 1, counts)
+            radial_power = radial_power / counts_safe
+
+            # Dominant frequency radius (excluding DC)
+            if len(radial_power) > 1:
+                dominant_radius = int(np.argmax(radial_power[1:]) + 1)
+            else:
+                dominant_radius = 0
+
+            return {
+                "radial_power": radial_power.tolist(),
+                "dominant_radius": dominant_radius,
+                "spectrum_log": spectrum_log.tolist() if spectrum_log.size <= 256 * 256 else None,  # avoid huge payloads
+            }
+        except Exception:
+            return {}
+
+    def _compute_color_spaces(self, img_array: np.ndarray, sample_size: int = 4000) -> Dict[str, Any]:
+        """Compute RGB sample points, HSV channels/histograms, and dominant colors"""
+        try:
+            h, w, _ = img_array.shape
+
+            # Sample RGB points for scatter (limit to sample_size)
+            flat = img_array.reshape(-1, 3)
+            total = flat.shape[0]
+            if total > sample_size:
+                idx = np.random.choice(total, size=sample_size, replace=False)
+                rgb_sample = flat[idx]
+            else:
+                rgb_sample = flat
+
+            # HSV conversion (float 0-1)
+            rgb_float = img_array.astype(np.float32) / 255.0
+            hsv = mpl_colors.rgb_to_hsv(rgb_float)
+            h_channel = hsv[:, :, 0]
+            s_channel = hsv[:, :, 1]
+            v_channel = hsv[:, :, 2]
+
+            # Histograms for HSV
+            hsv_hist = {
+                "hue_histogram": self._compute_histogram_data((h_channel * 360).astype(np.float32), bins=36),
+                "saturation_histogram": self._compute_histogram_data((s_channel * 255).astype(np.float32), bins=50),
+                "value_histogram": self._compute_histogram_data((v_channel * 255).astype(np.float32), bins=50),
+            }
+
+            # Dominant colors via k-means (small K)
+            dominant = self._dominant_colors(rgb_sample, k=6, iterations=8)
+
+            return {
+                "rgb_sample": rgb_sample.astype(int).tolist(),
+                "hsv_histograms": hsv_hist,
+                "dominant_colors": dominant,
+            }
+        except Exception:
+            return {}
+
+    def _dominant_colors(self, rgb_sample: np.ndarray, k: int = 6, iterations: int = 8) -> List[Dict[str, Any]]:
+        """Simple k-means on sampled RGB points"""
+        try:
+            # Initialize centroids from random samples
+            if rgb_sample.shape[0] == 0:
+                return []
+            k = min(k, rgb_sample.shape[0])
+            idx = np.random.choice(rgb_sample.shape[0], k, replace=False)
+            centroids = rgb_sample[idx].astype(np.float32)
+
+            points = rgb_sample.astype(np.float32)
+
+            for _ in range(iterations):
+                # Assign
+                distances = np.linalg.norm(points[:, None, :] - centroids[None, :, :], axis=2)
+                labels = np.argmin(distances, axis=1)
+                # Update
+                for ci in range(k):
+                    mask = labels == ci
+                    if np.any(mask):
+                        centroids[ci] = points[mask].mean(axis=0)
+
+            # Compute percentages
+            distances = np.linalg.norm(points[:, None, :] - centroids[None, :, :], axis=2)
+            labels = np.argmin(distances, axis=1)
+            counts = np.bincount(labels, minlength=k)
+            total = counts.sum() if counts.sum() > 0 else 1
+            result = []
+            for ci in range(k):
+                result.append({
+                    "color": [int(c) for c in np.clip(centroids[ci], 0, 255)],
+                    "percent": float(counts[ci] / total * 100.0)
+                })
+            # Sort by percent desc
+            result = sorted(result, key=lambda x: x["percent"], reverse=True)
+            return result
+        except Exception:
+            return []
 

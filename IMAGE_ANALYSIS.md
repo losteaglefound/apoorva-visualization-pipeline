@@ -13,6 +13,11 @@ The image analysis feature generates detailed reports for each image, including:
 5. **Individual Channel Histograms** - Separate histograms for Red, Green, and Blue channels with statistics
 6. **Edge Detection Statistics** - Detailed statistics about edge density and strength
 7. **3D Intensity Surface** - 3D surface plot of grayscale intensity (downsampled for performance)
+8. **Frequency Domain Analysis** - 2D Fourier spectrum and radial power spectrum to reveal texture and periodic patterns
+9. **Color Space Explorations**
+   - 3D RGB Color Space Scatter (sampled pixels)
+   - HSV Decomposition: Hue, Saturation, Value histograms
+   - Dominant Color Palette (top colors with percentages)
 
 Each analysis report includes:
 - Image dimensions and total pixel count
@@ -82,6 +87,11 @@ Each image analysis report is saved as a PNG file with a 2x4 grid layout:
 Additionally, each analysis generates a separate file with a 3D surface plot of grayscale intensity:
 
 - `{base_name}_surface.png` shows the grayscale intensity as a 3D surface (downsampled to ~128×128 for speed).
+- `{base_name}_frequency.png` shows the 2D Fourier spectrum (log scale) and the radial power spectrum; the dominant frequency radius is highlighted.
+- `{base_name}_colorspace.png` shows:
+  - RGB cube scatter plot (sampled pixels)
+  - Hue, Saturation, Value histograms
+  - Dominant color palette with percentages
 
 ## Analysis Details
 
