@@ -93,6 +93,40 @@ Additionally, each analysis generates a separate file with a 3D surface plot of 
   - Hue, Saturation, Value histograms
   - Dominant color palette with percentages
 
+## Analyzer Reference and How to Read the Outputs
+
+### Main Report (`*_analysis.png`)
+- **Original Image**: Visual check of the source.
+- **Grayscale**: Single-channel luminance. Stats box shows mean/std/min/max brightness.
+- **Edge Detection**: Canny-style edges highlighting contours; density and strong/weak edge counts are shown in stats.
+- **RGB Histogram**: Overlaid R/G/B distributions (0–255). Peaks indicate dominant intensity ranges per channel.
+- **Red/Green/Blue Channel Histograms**: Separate distributions with mean lines; useful to spot clipping, low contrast, or channel imbalance.
+- **Edge Stats Panel**: Edge density (% of pixels flagged as edges), strong/weak edges, mean/std of edge strength.
+
+### Intensity Surface (`*_surface.png`)
+- 3D surface of grayscale intensity (downsampled). Peaks = bright regions, valleys = dark. Useful to spot lighting gradients, glare, or low-contrast areas.
+
+### Frequency Domain (`*_frequency.png`)
+- **2D Fourier Spectrum (log scale)**: Bright center = low frequencies (smooth areas). Bright rings or off-center energy indicate periodic textures or aliasing.
+- **Radial Power Spectrum**: Mean power vs. radius (frequency). Dominant radius (red dashed line) highlights the strongest frequency band; low radius = coarse structure, higher = fine texture.
+
+### Color Space (`*_colorspace.png`)
+- **RGB Cube Scatter**: Sampled pixels plotted in RGB space; clusters show dominant color regions. Spread toward edges can indicate saturation/clipping.
+- **Hue/Saturation/Value Histograms**:
+  - Hue (degrees): Distribution of dominant hues.
+  - Saturation (0–255): Higher values → more vivid colors; narrow low range → desaturation.
+  - Value (0–255): Brightness distribution; watch for heavy tails at 0 or 255 (black/white clipping).
+- **Dominant Palette**: Top colors with percentages from k-means; indicates overall color makeup.
+
+### Edge Detection (under the hood)
+- Canny-like flow: blur → Sobel gradients → magnitude → adaptive thresholds → simplified non-max suppression. Edge stats use the resulting edge map (strong=255, weak=128).
+
+### Frequency Analysis (under the hood)
+- 2D FFT on grayscale; log-magnitude spectrum; radial averaging to get power vs. radius; dominant radius = argmax of radial power (excluding DC).
+
+### Color Analysis (under the hood)
+- RGB sampling (capped for performance), RGB→HSV conversion, histograms per HSV channel, k-means (k≈6) on sampled RGB for dominant colors.
+
 ## Analysis Details
 
 ### Grayscale Conversion
